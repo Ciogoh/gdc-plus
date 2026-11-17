@@ -141,9 +141,14 @@ body.preview .sidebar, body.preview .topbar, body.preview .status { visibility: 
 .layer:hover { background: var(--hover); }
 .layer.active { background: var(--ink); color: #fff; }
 .layer .eye { border: 0; background: transparent; padding: 0 2px; width: 18px; color: inherit; }
+.layer .grip { cursor: grab; opacity: .4; font-size: 11px; }
+.layer .lname { flex: 1; }
+.layer .lop { width: 72px; flex: none; accent-color: var(--accent); }
+.layer .lopv { width: 34px; text-align: right; font-size: 10px; opacity: .7; font-variant-numeric: tabular-nums; }
 .layer.off .lname { text-decoration: line-through; opacity: .5; }
 .layerBar { margin-top: 2px; }
 .layerBar .hint { margin-left: auto; }
+
 /* sketch search */
 .sketch { display: grid; grid-template-columns: 132px 1fr; gap: 8px; }
 .padWrap { position: relative; width: 132px; height: 132px; }
@@ -163,6 +168,7 @@ body.preview .sidebar, body.preview .topbar, body.preview .status { visibility: 
 .sketchResults .res { aspect-ratio: 1; padding: 2px; border: 0; border-radius: 3px; background: transparent; }
 .sketchResults .res:hover { background: var(--hover); }
 .sketchResults .res.sel { outline: 2px solid var(--accent); }
+.sketchResults .res.fam { grid-column-start: 1; } /* each shape family on its own row */
 .sketchResults .res svg { width: 100%; height: 100%; display: block; fill: #111; }
 .slots { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
 .slot { aspect-ratio: 1; border: 1px solid var(--line); border-radius: 4px; background: #fff; position: relative; cursor: pointer; padding: 0; }

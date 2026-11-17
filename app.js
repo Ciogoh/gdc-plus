@@ -18,7 +18,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v))
 const MAX_HISTORY = 64
 
 /* ---------- state ---------- */
-const S = { canvasWidth: 20, canvasHeight: 15, cellWidth: 20, cellHeight: 20, defaultFontSize: 20, layers: 1, canvas: [] }
+const S = { canvasWidth: 20, canvasHeight: 15, cellWidth: 20, cellHeight: 20, defaultFontSize: 20, layers: 2, opacity: [1, 1], canvas: [] }
 const U = {
 	x: 0, y: 0, layer: 0, hidden: [false, false, false, false],
 	sel: { start: null, end: null },
@@ -44,8 +44,9 @@ const getState = () => ({
 	name: "gdc-file", timestamp: Math.floor(Date.now() / 1000),
 	canvasWidth: S.canvasWidth, canvasHeight: S.canvasHeight, cellWidth: S.cellWidth,
 	cellHeight: S.cellHeight, defaultFontSize: S.defaultFontSize, canvas: fileCanvas(S.canvas),
+	layerOpacity: [...S.opacity, 1, 1, 1].slice(0, Math.max(4, S.layers)), // extra field: the original app ignores it
 })
-const stateKey = () => JSON.stringify([S.canvasWidth, S.canvasHeight, S.cellWidth, S.cellHeight, S.defaultFontSize, S.layers, S.canvas])
+const stateKey = () => JSON.stringify([S.canvasWidth, S.canvasHeight, S.cellWidth, S.cellHeight, S.defaultFontSize, S.layers, S.opacity, S.canvas])
 
 /* ---------- validation at the trust boundary (files + localStorage end up in innerHTML) ---------- */
 const PATH_OK = /^[MLQCZmlqcz0-9.,\-+eE\s]*$/
@@ -66,9 +67,11 @@ function cleanState(st) {
 	let n = clamp(Math.max(...cells.map(c => (Array.isArray(c) ? c.length - 1 : 1))), 1, MAX_LAYERS)
 	const canvas = st.canvas.map(r => Array.from({ length: w }, (_, x) => cleanCell(Array.isArray(r) ? r[x] : null, n)))
 	// drop trailing layers that are empty everywhere (old files always carry 4) — keeps the panel simple
-	while (n > 1 && canvas.every(r => r.every(c => isEmpty(c[n - 1])))) { canvas.forEach(r => r.forEach(c => c.splice(n - 1, 1))); n-- }
+	while (n > 2 && canvas.every(r => r.every(c => isEmpty(c[n - 1])))) { canvas.forEach(r => r.forEach(c => c.splice(n - 1, 1))); n-- }
+	if (n < 2) { canvas.forEach(r => r.forEach(c => c.splice(n, 0, emptyLayer()))); n = 2 } // always at least 2 layers
+	const op = Array.isArray(st.layerOpacity) ? st.layerOpacity : []
 	return {
-		canvasWidth: w, canvasHeight: h, layers: n,
+		canvasWidth: w, canvasHeight: h, layers: n, opacity: range(n).map(z => clamp(num(op[z], 1), 0, 1)),
 		cellWidth: clamp(num(st.cellWidth, 20), 1, 500), cellHeight: clamp(num(st.cellHeight, 20), 1, 500),
 		defaultFontSize: clamp(num(st.defaultFontSize, 20), 1, 500),
 		canvas,
@@ -91,8 +94,8 @@ function commit() {
 	saveSoon()
 }
 function applyKey(s) {
-	const [w, h, cw, ch, f, layers, canvas] = JSON.parse(s)
-	setState({ canvasWidth: w, canvasHeight: h, cellWidth: cw, cellHeight: ch, defaultFontSize: f, layers, canvas })
+	const [w, h, cw, ch, f, layers, opacity, canvas] = JSON.parse(s)
+	setState({ canvasWidth: w, canvasHeight: h, cellWidth: cw, cellHeight: ch, defaultFontSize: f, layers, opacity, canvas })
 }
 function undo() {
 	if (history.length < 2) return toast("Niente da annullare")
@@ -292,6 +295,7 @@ const A = {
 		const at = U.layer + 1
 		S.canvas.forEach(r => r.forEach(c => c.splice(at, 0, emptyLayer())))
 		U.hidden.splice(at, 0, false)
+		S.opacity.splice(at, 0, 1)
 		S.layers++
 		U.layer = at
 	},
@@ -299,6 +303,7 @@ const A = {
 		if (S.layers < 2) return toast("Serve almeno un layer")
 		S.canvas.forEach(r => r.forEach(c => c.splice(U.layer, 1)))
 		U.hidden.splice(U.layer, 1)
+		S.opacity.splice(U.layer, 1)
 		S.layers--
 		U.layer = Math.max(0, U.layer - 1)
 		toast("Layer eliminato — ⌘Z per annullare")
@@ -307,6 +312,7 @@ const A = {
 		if (from === to) return
 		S.canvas.forEach(r => r.forEach(c => c.splice(to, 0, c.splice(from, 1)[0])))
 		U.hidden.splice(to, 0, U.hidden.splice(from, 1)[0])
+		S.opacity.splice(to, 0, S.opacity.splice(from, 1)[0])
 		U.layer = to
 	},
 	// area selection
@@ -405,9 +411,9 @@ const A = {
 	colDelAt() { if (S.canvasWidth < 2) return; S.canvas.forEach(r => r.splice(U.x, 1)); S.canvasWidth--; U.x = Math.min(U.x, S.canvasWidth - 1) },
 	emptyCanvas() {
 		if (!confirm("Svuotare la tela? (puoi annullare con ⌘Z)")) return
-		Object.assign(S, { canvasWidth: 20, canvasHeight: 15, cellWidth: 20, cellHeight: 20, defaultFontSize: 20, layers: 1 })
+		Object.assign(S, { canvasWidth: 20, canvasHeight: 15, cellWidth: 20, cellHeight: 20, defaultFontSize: 20, layers: 2, opacity: [1, 1] })
 		U.layer = 0
-		U.hidden = [false]
+		U.hidden = [false, false]
 		S.canvas = Array.from({ length: 15 }, () => Array.from({ length: 20 }, () => emptyCell()))
 		U.x = U.y = 0
 		A.deselect()
@@ -464,33 +470,78 @@ function selectGlyph(gid, scroll = true) {
 }
 
 /* ---------- sketch search: draw a shape, get the most similar glyphs (+ rotated / mirrored / inverted) ---------- */
-const SK = 16 // shapes are compared as 16×16 coverage maps
+const SK = 24 // shapes are compared as 24×24 contour maps
 const VARIANTS = [[0, 1], [-90, 1], [-180, 1], [-270, 1], [0, -1], [-90, -1], [-180, -1], [-270, -1]] // [rotation, flip]
 let shapeIndex = null, indexJob = 0, sketchResults = [], sketchSel = 0
-// 3×3 box blur: makes rough strokes comparable to clean shapes
-function blur(a) {
-	const o = new Float32Array(SK * SK)
+/* Matching works on contours, not filled pixels (chamfer matching, the classic approach for sketch → shape
+   retrieval): a circle drawn as an outline and a filled disc share the same edge, and a stroke drawn a bit off
+   only costs its distance. Rotations come from rendering each glyph in all 8 orientations ("multiple templates"). */
+// contour pixels of a binary mask: inside pixels touching the outside or the cell edge
+function contour(mask) {
+	const e = []
 	for (let y = 0; y < SK; y++) for (let x = 0; x < SK; x++) {
-		let t = 0, n = 0
-		for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-			const yy = y + dy, xx = x + dx
-			if (yy >= 0 && yy < SK && xx >= 0 && xx < SK) { t += a[yy * SK + xx]; n++ }
-		}
-		o[y * SK + x] = t / n
+		const i = y * SK + x
+		if (mask[i] && (x === 0 || y === 0 || x === SK - 1 || y === SK - 1 || !mask[i - 1] || !mask[i + 1] || !mask[i - SK] || !mask[i + SK])) e.push(i)
 	}
-	return o
+	return e
 }
-// renders every glyph × 8 variants with the canvas' own matrix, in chunks so the UI never freezes
+// distance (in px) from every pixel to the nearest point of a set — two-pass 3-4 chamfer distance transform
+function distMap(pts) {
+	const d = new Float32Array(SK * SK).fill(1e6)
+	pts.forEach(i => (d[i] = 0))
+	for (let y = 0; y < SK; y++) for (let x = 0; x < SK; x++) {
+		const i = y * SK + x
+		let v = d[i]
+		if (x > 0) v = Math.min(v, d[i - 1] + 3)
+		if (y > 0) {
+			v = Math.min(v, d[i - SK] + 3)
+			if (x > 0) v = Math.min(v, d[i - SK - 1] + 4)
+			if (x < SK - 1) v = Math.min(v, d[i - SK + 1] + 4)
+		}
+		d[i] = v
+	}
+	for (let y = SK - 1; y >= 0; y--) for (let x = SK - 1; x >= 0; x--) {
+		const i = y * SK + x
+		let v = d[i]
+		if (x < SK - 1) v = Math.min(v, d[i + 1] + 3)
+		if (y < SK - 1) {
+			v = Math.min(v, d[i + SK] + 3)
+			if (x < SK - 1) v = Math.min(v, d[i + SK + 1] + 4)
+			if (x > 0) v = Math.min(v, d[i + SK - 1] + 4)
+		}
+		d[i] = v
+	}
+	for (let i = 0; i < d.length; i++) d[i] /= 3
+	return d
+}
+// one index entry per distinct shape: its contour points and its distance map (stored compactly)
+function shapeEntry(mask, gid, rot, flip, inv) {
+	const edges = contour(mask)
+	if (!edges.length) return null
+	const dm = distMap(edges), dist = new Uint8Array(SK * SK)
+	for (let i = 0; i < dm.length; i++) dist[i] = Math.min(255, Math.round(dm[i] * 8))
+	return { gid, rot, flip, inv, edges: Uint16Array.from(edges), dist, mask, area: mask.reduce((a, v) => a + v, 0) }
+}
+// renders every glyph × 8 orientations (+ inverted) with the canvas' own matrix, in chunks so the UI never freezes
 function buildShapeIndex() {
-	const job = ++indexJob, f = font, n = f.maxp.numGlyphs, out = []
+	const job = ++indexJob, f = font, n = f.maxp.numGlyphs, out = [], seen = new Set()
+	// shortcut: inverted variants are indexed only for fonts up to 1200 glyphs (memory); raise if big fonts need them
+	const withInverted = n <= 1200
 	const cnv = document.createElement("canvas")
 	cnv.width = cnv.height = SK
 	const ctx = cnv.getContext("2d", { willReadFrequently: true })
 	shapeIndex = null
 	let gid = 0
+	const add = (mask, ...meta) => {
+		const key = mask.join("")
+		if (seen.has(key)) return // symmetric glyphs and look-alikes give identical shapes
+		seen.add(key)
+		const e = shapeEntry(mask, ...meta)
+		if (e) out.push(e)
+	}
 	const step = () => {
 		if (job !== indexJob) return // font changed meanwhile
-		const end = Math.min(n, gid + 60)
+		const end = Math.min(n, gid + 40)
 		for (; gid < end; gid++) {
 			const g = glyphData(gid)
 			if (g.path === EMPTY_PATH) continue
@@ -501,9 +552,10 @@ function buildShapeIndex() {
 				ctx.clearRect(0, 0, SK, SK)
 				ctx.setTransform(...layerMatrix(L, 0, 0, SK))
 				ctx.fill(p2d)
-				const d = ctx.getImageData(0, 0, SK, SK).data, a = new Float32Array(SK * SK)
-				for (let i = 0; i < a.length; i++) a[i] = d[i * 4 + 3] / 255
-				out.push({ gid, rot, flip, map: blur(a) })
+				const d = ctx.getImageData(0, 0, SK, SK).data, mask = new Uint8Array(SK * SK)
+				for (let i = 0; i < mask.length; i++) mask[i] = d[i * 4 + 3] > 127 ? 1 : 0
+				add(mask, gid, rot, flip, false)
+				if (withInverted) add(mask.map(v => 1 - v), gid, rot, flip, true)
 			})
 		}
 		if (gid < n) { renderSketchStatus(`Analizzo le forme del font… ${Math.round((gid / n) * 100)}%`); setTimeout(step, 0) }
@@ -564,65 +616,97 @@ pad.addEventListener("pointercancel", endStroke)
 pad.addEventListener("contextmenu", e => e.preventDefault())
 $("sketchClear").onclick = () => { clearSketch(); sketchResults = []; renderSketchResults() }
 
-// sketch → 16×16 coverage, plus a version with closed outlines filled in (so drawing just the contour works too)
-function sketchMaps() {
-	const W = pad.width, d = padCtx.getImageData(0, 0, W, W).data
-	const G = 64, fine = new Uint8Array(G * G), cnt = new Uint32Array(G * G)
-	const raw = new Float32Array(SK * SK), rc = new Uint32Array(SK * SK)
-	for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
-		const a = d[(y * W + x) * 4 + 3] / 255
-		const gi = ((y * G / W) | 0) * G + ((x * G / W) | 0)
-		if (a > 0.4) fine[gi] = 1
-		cnt[gi]++
-		const si = ((y * SK / W) | 0) * SK + ((x * SK / W) | 0)
-		raw[si] += a; rc[si]++
+// The sketch becomes a filled shape by the even-odd rule, like vector apps: an area is inside when reaching it
+// from the outside crosses an odd number of strokes. One outline → solid, two nested circles → ring,
+// a scribbled fill stays solid. Its contour is what gets compared.
+function sketchSets(d, W) {
+	const G = 72, ink = new Uint8Array(G * G)
+	for (let y = 0; y < W; y++) for (let x = 0; x < W; x++)
+		if (d[(y * W + x) * 4 + 3] > 100) ink[((y * G / W) | 0) * G + ((x * G / W) | 0)] = 1
+	// 0-1 BFS: leaving a stroke into empty space costs one crossing
+	const dq = new Int32Array(G * G * 16), best = new Int32Array(G * G).fill(1e9) // deque grows both ways from the middle
+	let head = G * G * 8, tail = head
+	for (let i = 0; i < G; i++) [i, (G - 1) * G + i, i * G, i * G + G - 1].forEach(j => { if (best[j]) { best[j] = 0; dq[tail++] = j } })
+	while (head < tail) {
+		const j = dq[head++], x = j % G, y = (j / G) | 0
+		for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+			const xx = x + dx, yy = y + dy
+			if (xx < 0 || yy < 0 || xx >= G || yy >= G) continue
+			const k = yy * G + xx, w = ink[j] && !ink[k] ? 1 : 0
+			if (best[j] + w < best[k]) {
+				best[k] = best[j] + w
+				if (w) dq[tail++] = k
+				else dq[--head] = k
+			}
+		}
 	}
-	for (let i = 0; i < raw.length; i++) raw[i] /= rc[i] || 1
-	// flood the empty space from the border; whatever stays unreached is enclosed → filled
-	const seen = new Uint8Array(G * G), stack = []
-	for (let i = 0; i < G; i++) [i, (G - 1) * G + i, i * G, i * G + G - 1].forEach(j => { if (!fine[j] && !seen[j]) { seen[j] = 1; stack.push(j) } })
-	while (stack.length) {
-		const j = stack.pop(), x = j % G, y = (j / G) | 0
-		;[[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
-			const xx = x + dx, yy = y + dy, k = yy * G + xx
-			if (xx >= 0 && xx < G && yy >= 0 && yy < G && !fine[k] && !seen[k]) { seen[k] = 1; stack.push(k) }
-		})
+	const fine = Uint8Array.from(ink, (v, j) => (v || best[j] % 2 === 1 ? 1 : 0))
+	const cov = new Float32Array(SK * SK)
+	for (let j = 0; j < G * G; j++) if (fine[j]) cov[(((j / G) | 0) * SK / G | 0) * SK + ((j % G) * SK / G | 0)] += (SK * SK) / (G * G)
+	const fill = Uint8Array.from(cov, v => (v > 0.45 ? 1 : 0))
+	const edges = contour(fill)
+	if (!edges.length) return []
+	return [{ edges, dist: distMap(edges), fill, area: fill.reduce((a, v) => a + v, 0) }]
+}
+// Size and position of a quick sketch are sloppy, but in a cell they matter (a quarter circle lives in a corner).
+// So the sketch is tried as drawn, and scaled up to fill the cell anchored at start / centre / end of the short side.
+function sketchVariants() {
+	const W = pad.width, src = padCtx.getImageData(0, 0, W, W)
+	let x0 = W, y0 = W, x1 = -1, y1 = -1
+	for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) if (src.data[(y * W + x) * 4 + 3] > 100) {
+		if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y
 	}
-	const filled = Float32Array.from(raw)
-	for (let j = 0; j < G * G; j++) if (!fine[j] && !seen[j]) {
-		const si = (((j / G) | 0) * SK / G | 0) * SK + ((j % G) * SK / G | 0)
-		filled[si] = Math.min(1, filled[si] + (SK * SK) / (G * G)) // one fine cell = 1/16 of a coarse cell
+	if (x1 < 0) return []
+	const out = sketchSets(src.data, W).map(s => ({ ...s, penalty: 0 }))
+	const bw = x1 - x0 + 1, bh = y1 - y0 + 1, sc = Math.min(W / Math.max(bw, bh), 3)
+	if (sc < 1.05) return out // already fills the cell
+	const tmp = document.createElement("canvas")
+	tmp.width = tmp.height = W
+	const tc = tmp.getContext("2d", { willReadFrequently: true })
+	const long = bw >= bh, free = W - sc * (long ? bh : bw)
+	const anchors = free < W * 0.08 ? [free / 2] : [0, free / 2, free]
+	for (const off of anchors) {
+		tc.setTransform(1, 0, 0, 1, 0, 0)
+		tc.clearRect(0, 0, W, W)
+		const tx = long ? -x0 * sc : off - x0 * sc, ty = long ? off - y0 * sc : -y0 * sc
+		tc.setTransform(sc, 0, 0, sc, tx, ty)
+		tc.drawImage(pad, 0, 0)
+		// a small handicap so a sketch already drawn in the right place wins ties
+		sketchSets(tc.getImageData(0, 0, W, W).data, W).forEach(s => out.push({ ...s, penalty: 0.15 }))
 	}
-	return [blur(raw), blur(filled)]
+	return out
+}
+// score in px: symmetric chamfer distance between contours (shape), plus how much the filled areas disagree
+// (side: a half disc and a square with a half-disc bite share the same arc, but not the same inside)
+const AREA_WEIGHT = 2
+function chamfer(e, s) {
+	let a = 0, b = 0, both = 0
+	for (const p of s.edges) a += e.dist[p]
+	for (const q of e.edges) b += s.dist[q]
+	const m = e.mask, f = s.fill
+	for (let i = 0; i < m.length; i++) both += m[i] & f[i]
+	const iou = both / (e.area + s.area - both || 1)
+	return (a / 8 / s.edges.length + b / e.edges.length) / 2 + AREA_WEIGHT * (1 - iou)
 }
 function searchSketch() {
 	if (!padInk) return
 	if (!shapeIndex) return renderSketchStatus("Analizzo le forme del font…")
-	const maps = sketchMaps()
-	if (!maps[0].some(v => v > 0.02)) { sketchResults = []; return renderSketchResults() }
-	const scored = []
-	for (const e of shapeIndex) {
-		for (const inv of [false, true]) {
-			// soft IoU (overlap / union): penalises both missing and extra ink, so thin strokes don't match empty glyphs
-			let best = Infinity
-			for (const m of maps) {
-				let mn = 0, mx = 0
-				for (let i = 0; i < m.length; i++) { const g = inv ? 1 - e.map[i] : e.map[i]; mn += Math.min(g, m[i]); mx += Math.max(g, m[i]) }
-				const d = mx > 0 ? 1 - mn / mx : 1
-				if (d < best) best = d
-			}
-			scored.push({ e, inv, score: best })
-		}
+	const sets = sketchVariants()
+	if (!sets.length) { sketchResults = []; return renderSketchResults() }
+	// score every shape; a glyph's family rank is its best orientation
+	const scored = shapeIndex.map(e => ({ e, score: Math.min(...sets.map(s => chamfer(e, s) + s.penalty)) }))
+	const families = new Map()
+	for (const x of scored) {
+		const f = families.get(x.e.gid)
+		if (!f) families.set(x.e.gid, { best: x.score, items: [x] })
+		else { f.items.push(x); f.best = Math.min(f.best, x.score) }
 	}
-	scored.sort((a, b) => a.score - b.score)
-	// drop look-alikes (symmetric glyphs give identical variants)
-	const seenKeys = new Set(), res = []
-	for (const s of scored) {
-		const key = Array.from(s.e.map, v => Math.round((s.inv ? 1 - v : v) * 6)).join("")
-		if (seenKeys.has(key)) continue
-		seenKeys.add(key)
-		res.push({ gid: s.e.gid, rot: s.e.rot, flip: s.e.flip, inv: s.inv })
-		if (res.length >= 48) break
+	// most similar shape first, followed by all its rotations / mirrors / inversions, then the next shape
+	const ranked = [...families.values()].sort((a, b) => a.best - b.best)
+	const res = []
+	for (const f of ranked) {
+		f.items.sort((a, b) => a.score - b.score).forEach((x, k) => res.push({ gid: x.e.gid, rot: x.e.rot, flip: x.e.flip, inv: x.e.inv, fam: k === 0 }))
+		if (res.length >= 72) break
 	}
 	sketchResults = res
 	sketchSel = 0
@@ -645,10 +729,20 @@ const variantSvg = (L, px) => `<svg viewBox="0 0 ${px} ${px}"><path transform="m
 function renderSketchResults() {
 	$("sketchResults").innerHTML = sketchResults.map((r, i) => {
 		const g = glyphData(r.gid)
-		return `<button class="res ${i === sketchSel ? "sel" : ""}" data-res="${i}" title="#${r.gid + 1}${r.rot ? " ↻" + -r.rot + "°" : ""}${r.flip < 0 ? " specchiato" : ""}${r.inv ? " invertito" : ""}">${variantSvg([g.path, g.w, g.h, g.base, 0, 0, r.rot, r.flip, r.inv, 0, 0], 40)}</button>`
+		return `<button class="res ${i === sketchSel ? "sel" : ""} ${r.fam ? "fam" : ""}" data-res="${i}" title="#${r.gid + 1}${r.rot ? " ↻" + -r.rot + "°" : ""}${r.flip < 0 ? " specchiato" : ""}${r.inv ? " invertito" : ""}">${variantSvg([g.path, g.w, g.h, g.base, 0, 0, r.rot, r.flip, r.inv, 0, 0], 40)}</button>`
 	}).join("")
 	$("sketchResults").classList.toggle("empty", !sketchResults.length)
 	refreshUI()
+}
+// index of the result in the next/previous visual row, closest horizontally
+function resultBelow(dir) {
+	const els = [...$("sketchResults").children], cur = els[sketchSel]?.getBoundingClientRect()
+	if (!cur) return sketchSel
+	const rows = els.map((el, i) => ({ i, r: el.getBoundingClientRect() })).filter(o => (dir > 0 ? o.r.top > cur.top + 2 : o.r.top < cur.top - 2))
+	if (!rows.length) return sketchSel
+	const rowTop = dir > 0 ? Math.min(...rows.map(o => o.r.top)) : Math.max(...rows.map(o => o.r.top))
+	const row = rows.filter(o => Math.abs(o.r.top - rowTop) < 2)
+	return row.reduce((b, o) => (Math.abs(o.r.left - cur.left) < Math.abs(b.r.left - cur.left) ? o : b)).i
 }
 function renderSketchStatus(msg) { $("sketchStatus").textContent = msg }
 $("sketchResults").addEventListener("click", e => {
@@ -706,7 +800,8 @@ function cellFg(c, x, y) {
 	for (let z = 0; z < S.layers; z++) {
 		const L = c[z]
 		if (isEmpty(L) || U.hidden[z]) continue
-		s += `<path transform="matrix(${layerMatrix(L, x, y).map(r3).join(" ")})" d="${layerPath(L)}" fill="${rgbOf(L[10])}"/>`
+		const op = S.opacity[z] ?? 1
+		s += `<path transform="matrix(${layerMatrix(L, x, y).map(r3).join(" ")})" d="${layerPath(L)}" fill="${rgbOf(L[10])}"${op < 1 ? ` fill-opacity="${op}"` : ""}/>`
 	}
 	return s
 }
@@ -715,7 +810,8 @@ const cellBg = (c, x, y) => (c[BG()][0] == 255 ? "" : `<rect x="${x * S.cellWidt
 function render() {
 	const W = S.canvasWidth, H = S.canvasHeight, cw = S.cellWidth, ch = S.cellHeight
 	U.hidden = range(S.layers).map(z => !!U.hidden[z]) // keep in step with the layer count (undo, open…)
-	const sk = JSON.stringify([W, H, cw, ch, S.defaultFontSize, S.layers, U.hidden, C.pal, palette(), C.cohesion, C.cohColor])
+	S.opacity = range(S.layers).map(z => S.opacity?.[z] ?? 1)
+	const sk = JSON.stringify([W, H, cw, ch, S.defaultFontSize, S.layers, S.opacity, U.hidden, C.pal, palette(), C.cohesion, C.cohColor])
 	if (sk !== structKey) {
 		structKey = sk
 		const pw = W * cw, ph = H * ch
@@ -789,9 +885,12 @@ function refreshUI() {
 	$("offVal").textContent = `${L[4]}, ${L[9]}`
 	// layers
 	$("layers").innerHTML = range(S.layers).reverse().map(z => `
-		<div class="layer ${z === U.layer ? "active" : ""} ${U.hidden[z] ? "off" : ""}" data-layer="${z}" draggable="true">
+		<div class="layer ${z === U.layer ? "active" : ""} ${U.hidden[z] ? "off" : ""}" data-layer="${z}">
+			<span class="grip" draggable="true" title="Trascina per riordinare">⠿</span>
 			<button class="eye" data-lhide="${z}" title="Mostra / nascondi">${U.hidden[z] ? "◌" : "●"}</button>
 			<span class="lname">Layer ${z + 1}</span>
+			<input class="lop" type="range" min="0" max="100" step="5" value="${Math.round((S.opacity[z] ?? 1) * 100)}" data-lop="${z}" title="Opacità del layer" />
+			<span class="lopv">${Math.round((S.opacity[z] ?? 1) * 100)}%</span>
 		</div>`).join("")
 	$("layerDel").disabled = S.layers < 2
 	// glyph sets
@@ -874,7 +973,10 @@ function fit() {
 	U.panY = (r.height - ph * U.zoom) / 2
 	render()
 }
+let viewTouched = false
+new ResizeObserver(() => { if (!viewTouched && S.canvas.length) fit() }).observe(stage)
 function zoomAt(f, cx, cy) {
+	viewTouched = true
 	const r = stage.getBoundingClientRect()
 	cx ??= r.width / 2; cy ??= r.height / 2
 	const nz = clamp(U.zoom * f, 0.05, 20)
@@ -889,6 +991,7 @@ stage.addEventListener("wheel", e => {
 		const r = stage.getBoundingClientRect()
 		zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX - r.left, e.clientY - r.top)
 	} else {
+		viewTouched = true
 		U.panX -= e.deltaX
 		U.panY -= e.deltaY
 		applyView()
@@ -912,6 +1015,7 @@ function paintAt(e) {
 stage.addEventListener("mousedown", e => {
 	if (e.button === 1 || (e.button === 0 && e.target === stage && !e.shiftKey)) {
 		mouse = { down: true, mode: "pan", panFrom: [e.clientX - U.panX, e.clientY - U.panY] }
+		viewTouched = true
 		return
 	}
 	if (e.button !== 0 || !sheet.contains(e.target)) return
@@ -992,9 +1096,8 @@ function onKey(e) {
 	if (U.typing) return typingKey(e)
 	if (e.key === "Tab" && sketchResults.length) return run(e, () => { U.resultsFocus = !U.resultsFocus; refreshUI() })
 	if (U.resultsFocus && sketchResults.length && !e.ctrlKey && !e.altKey) {
-		const cols = Math.max(1, Math.round($("sketchResults").clientWidth / ($("sketchResults").firstElementChild?.offsetWidth || 40)))
-		const nav = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: cols, ArrowUp: -cols }
-		if (e.key in nav) return run(e, () => pickSketch(sketchSel + nav[e.key]))
+		if (e.key === "ArrowRight" || e.key === "ArrowLeft") return run(e, () => pickSketch(sketchSel + (e.key === "ArrowRight" ? 1 : -1)))
+		if (e.key === "ArrowDown" || e.key === "ArrowUp") return run(e, () => pickSketch(resultBelow(e.key === "ArrowDown" ? 1 : -1)))
 		if (e.key === "Escape") return run(e, () => { U.resultsFocus = false; refreshUI() })
 		if (k === "q" || e.key === "Enter") return run(e, () => { U.resultsFocus = false; act(A.insert) })
 	}
@@ -1009,9 +1112,9 @@ function onKey(e) {
 		d: () => A.move(1, 0, alt), a: () => A.move(-1, 0, alt), s: () => A.move(0, 1, alt), w: () => A.move(0, -1, alt),
 		q: A.insert, Enter: A.insert,
 		e: () => A.erase(all), " ": () => A.erase(false),
-		// Canc/Backspace (also with ⇧) empty the whole selection; without one they act on the cursor
-		Delete: () => (selArea() ? A.clearArea(true) : A.erase(all)),
-		Backspace: () => (selArea() ? A.clearArea(true) : A.backspace()),
+		// Canc/Backspace (also with ⇧) empty the selection on the active layer (Ctrl: all layers)
+		Delete: () => (selArea() ? A.clearArea(all) : A.erase(all)),
+		Backspace: () => (selArea() ? A.clearArea(all) : A.backspace()),
 		r: () => A.rotate(all), f: () => A.flip(all), i: () => A.invert(all),
 		c: A.copyGlyph, v: () => A.colorFg(all), b: A.colorBg,
 		h: () => (U.hideGrid = !U.hideGrid),
@@ -1074,11 +1177,11 @@ function showQuickColor() {
 
 /* ---------- clean export ---------- */
 let exportInfo = ""
-function buildSvg(forPng) {
-	const withBg = $("exportBg").checked
+function buildSvg(forPng, onlyLayer = null) {
+	const withBg = $("exportBg").checked && onlyLayer === null
 	// groups only, no merging: layer → color → one path per shape (Illustrator: easy to select by group)
-	const groups = (id, byColor) => {
-		out.push(`<g id="${id}">`)
+	const groups = (id, byColor, op = 1) => {
+		out.push(`<g id="${id}"${op < 1 ? ` opacity="${op}"` : ""}>`)
 		byColor.forEach((els, col) => out.push(`<g id="${id}-${hexOf(col).slice(1)}" fill="${hexOf(col)}">`, ...els, `</g>`))
 		out.push(`</g>`)
 	}
@@ -1109,14 +1212,14 @@ function buildSvg(forPng) {
 		if (byColor.size) groups("sfondo", byColor)
 	}
 	for (let z = 0; z < S.layers; z++) {
-		if (U.hidden[z]) continue
+		if (U.hidden[z] || (onlyLayer !== null && z !== onlyLayer)) continue
 		const byColor = new Map()
 		grid.forEach((row, y) => row.forEach((c, x) => {
 			const L = c[z]
 			if (isEmpty(L)) return
 			bakeShapes(layerPath(L), layerMatrix(L, x, y)).forEach(d => push(byColor, L[10], `<path d="${d}"/>`))
 		}))
-		if (byColor.size) groups(`layer-${z + 1}`, byColor)
+		if (byColor.size) groups(`layer-${z + 1}`, byColor, S.opacity[z] ?? 1)
 	}
 	out.push(`</svg>`)
 	exportInfo = `${a ? `selezione ${ex - sx + 1}×${ey - sy + 1}` : "tutta la tela"} · ${nPaths} tracciati · ${colors.size} colori${mm ? ` · ${size(W)}×${size(H)}` : ""}`
@@ -1141,11 +1244,12 @@ function copyCells(cut) {
 	if (U.sel.start && !U.sel.end) A.makeSelection() // lock a live selection
 	const a = selArea() || [[U.y, U.x], [U.y, U.x]]
 	const [[sy, sx], [ey, ex]] = a
-	cellClipboard = clone(S.canvas.slice(sy, ey + 1).map(r => r.slice(sx, ex + 1)))
+	// works on the active layer only: copy it, cut it, paste it into whatever layer is active then
+	cellClipboard = clone(S.canvas.slice(sy, ey + 1).map(r => r.slice(sx, ex + 1).map(c => c[U.layer])))
 	// built before a cut empties the area; a single cell has no locked selection, so no SVG then
-	const svg = U.sel.end ? buildSvg() : ""
-	toast(`${cut ? "Tagliato" : "Copiato"} ${ex - sx + 1}×${ey - sy + 1} — ⌘V qui${svg ? " o in Illustrator" : ""}`)
-	if (cut) act(() => eachInArea(a, (c, x, y) => (S.canvas[y][x] = emptyCell())))
+	const svg = U.sel.end ? buildSvg(false, U.layer) : ""
+	toast(`${cut ? "Tagliato" : "Copiato"} ${ex - sx + 1}×${ey - sy + 1} dal layer ${U.layer + 1} — ⌘V qui${svg ? " o in Illustrator" : ""}`)
+	if (cut) act(() => eachInArea(a, c => (c[U.layer] = emptyLayer())))
 	else render(), refreshUI()
 	return { svg, json: JSON.stringify(cellClipboard) }
 }
@@ -1169,10 +1273,9 @@ document.addEventListener("paste", e => {
 	if (raw) {
 		try {
 			const rows = JSON.parse(raw)
-			if (Array.isArray(rows) && rows.length && rows.length * rows[0].length <= 250000) {
-				const n = clamp(Math.max(...rows.flat().map(c => (Array.isArray(c) ? c.length - 1 : 1))), 1, MAX_LAYERS)
-				cellClipboard = rows.map(r => r.map(c => cleanCell(c, n)))
-			}
+			// rows of layers; older copies held whole cells → take their first layer
+			if (Array.isArray(rows) && rows.length && Array.isArray(rows[0]) && rows.length * rows[0].length <= 250000)
+				cellClipboard = rows.map(r => r.map(c => cleanLayer(Array.isArray(c?.[0]) ? c[0] : c)))
 		} catch (err) { /* not ours: keep the in-app clipboard */ }
 	}
 	act(pasteCells)
@@ -1201,11 +1304,11 @@ function pasteCells() {
 	const h = cellClipboard.length, w = cellClipboard[0].length
 	cellClipboard.forEach((row, dy) => row.forEach((c, dx) => {
 		const y = U.y + dy, x = U.x + dx
-		if (y < S.canvasHeight && x < S.canvasWidth) S.canvas[y][x] = fitCell(c)
+		if (y < S.canvasHeight && x < S.canvasWidth) S.canvas[y][x][U.layer] = clone(c)
 	}))
 	// select what was pasted so it can be nudged right away with ⇧H/J/K/L
 	U.sel = { start: [U.y, U.x], end: [Math.min(U.y + h, S.canvasHeight) - 1, Math.min(U.x + w, S.canvasWidth) - 1] }
-	toast(`Incollato ${w}×${h}${U.x + w > S.canvasWidth || U.y + h > S.canvasHeight ? " (tagliato al bordo)" : ""}`)
+	toast(`Incollato ${w}×${h} nel layer ${U.layer + 1}${U.x + w > S.canvasWidth || U.y + h > S.canvasHeight ? " (tagliato al bordo)" : ""}`)
 }
 async function copySvg(msg) {
 	const svg = buildSvg()
@@ -1341,7 +1444,7 @@ $("helpClose").onclick = () => $("helpModal").classList.add("hidden")
 $("helpModal").onclick = e => e.target.id === "helpModal" && $("helpModal").classList.add("hidden")
 $("zoomIn").onclick = () => zoomAt(1.15)
 $("zoomOut").onclick = () => zoomAt(1 / 1.15)
-$("zoomReset").onclick = fit
+$("zoomReset").onclick = () => { viewTouched = false; fit() }
 $("zoomPct").onclick = () => zoomAt(1 / U.zoom)
 $("fileName").oninput = e => (U.fileName = e.target.value)
 $("toggleMapping").onchange = e => { U.mapping = e.target.checked; refreshUI() }
@@ -1350,6 +1453,15 @@ $("layerDel").onclick = () => act(A.deleteLayer)
 // drag a layer row to reorder (moves the whole layer)
 let dragLayer = null
 $("layers").addEventListener("dragstart", e => { dragLayer = +e.target.closest("[data-layer]").dataset.layer })
+// opacity: live preview while dragging, one undo step when released
+$("layers").addEventListener("input", e => {
+	const z = e.target.dataset.lop
+	if (z === undefined) return
+	S.opacity[+z] = +e.target.value / 100
+	e.target.nextElementSibling.textContent = e.target.value + "%"
+	render()
+})
+$("layers").addEventListener("change", e => { if (e.target.dataset.lop !== undefined) act(() => {}) })
 $("layers").addEventListener("dragover", e => e.preventDefault())
 $("layers").addEventListener("drop", e => {
 	e.preventDefault()
@@ -1411,12 +1523,12 @@ const MOD = IS_MAC ? "⌘" : "Ctrl+"
 const EXP = IS_MAC ? "⌘" : "Ctrl+Alt+"
 const HELP = [
 	["Movimento", [["Frecce / WASD", "Muovi il cursore"], ["Alt + frecce", "Salta di 5 celle"], ["Clic", "Sposta il cursore", 1], ["Rotella / trackpad", "Sposta la vista", 1], ["Pinch / " + MOD + "rotella", "Zoom", 1], ["+ / −", "Zoom"]]],
-	["Disegno", [["Q / Invio", "Disegna il glyph"], ["E / Spazio / Canc", "Cancella"], ["Backspace", "Cancella e torna indietro"], ["Canc / Backspace con selezione", "Svuota l'area", 1], ["R", "Ruota"], ["F", "Specchia"], ["I", "Inverti forma"], ["C", "Copia il glyph dalla cella"], ["[ / ]", "Glyph precedente / successivo", 1], ["{ / }", "Salta di 10 glyph", 1], [", / .", "Layer precedente / successivo"], ["O + frecce", "Sposta il glyph (offset)"], ["G", "Pennello: trascina per disegnare", 1], ["T", "Modalità scrittura (Esc esce)", 1]]],
+	["Disegno", [["Q / Invio", "Disegna il glyph"], ["E / Spazio / Canc", "Cancella"], ["Backspace", "Cancella e torna indietro"], ["Canc / Backspace con selezione", "Svuota l'area nel layer attivo (Ctrl: tutti)", 1], ["R", "Ruota"], ["F", "Specchia"], ["I", "Inverti forma"], ["C", "Copia il glyph dalla cella"], ["[ / ]", "Glyph precedente / successivo", 1], ["{ / }", "Salta di 10 glyph", 1], [", / .", "Layer precedente / successivo"], ["O + frecce", "Sposta il glyph (offset)"], ["G", "Pennello: trascina per disegnare", 1], ["T", "Modalità scrittura (Esc esce)", 1]]],
 	["Disegna la forma", [["Disegna nel riquadro", "Mostra i glyph più simili", 1], ["Pausa, poi disegna", "Ricomincia una forma nuova", 1], ["⇧ + disegna", "Aggiunge allo schizzo", 1], ["Clic destro / Alt", "Gomma sullo schizzo", 1], ["← → ↑ ↓", "Scegli tra i risultati", 1], ["Q / Invio", "Disegna la scelta al cursore", 1], ["Tab", "Passa tra risultati e tela", 1], ["[ / ]", "Risultato precedente / successivo", 1]]],
 	["Set di glyph", [["M", "Avvia / termina la mappatura"], ["1 – 0", "Assegna (mappatura) o inserisci"]]],
 	["Selezione area", [["⇧ + trascina", "Seleziona con il mouse", 1], ["⇧S", "Inizia / blocca selezione"], ["Esc / ⇧D", "Deseleziona"], ["⇧A", "Seleziona tutto"], ["⇧C", "Incolla l'area al cursore"], ["⇧M", "Specchia area"], ["⇧F", "Capovolgi area"], ["⇧Q", "Riempi col glyph"], ["⇧E", "Svuota area"], ["⇧I", "Inverti area"], ["⇧Y", "Ruota i glyph singolarmente"], ["⇧U", "Specchia i glyph singolarmente"], ["⇧R", "Ruota area (quadrata)"], ["⇧T", "Trasponi area (quadrata)"], ["⇧H ⇧J ⇧K ⇧L", "Sposta area ← ↓ ↑ →"]]],
 	["Colore", [["X (tieni)", "Palette rapida"], ["V", "Colora primo piano"], ["B", "Colora sfondo"], ["⇧V", "Colora primo piano area"], ["⇧B", "Colora sfondo area"]]],
-	["File & export", [[MOD + "Z / " + MOD + "⇧Z", "Annulla / ripeti"], [MOD + "S", "Salva .gdc", 1], [MOD + "O", "Apri .gdc", 1], [MOD + "C / " + MOD + "X", "Copia / taglia l'area (anche per Illustrator)", 1], [MOD + "V", "Incolla l'area al cursore", 1], [MOD + "A", "Seleziona tutto", 1], [EXP + "⇧C", "Copia SVG per Illustrator", 1], [EXP + "E", "Esporta SVG", 1], [EXP + "⇧E", "Esporta PNG", 1], ["H", "Nascondi griglia"], ["P (tieni)", "Anteprima pulita"], ["?", "Questa finestra", 1]]],
+	["File & export", [[MOD + "Z / " + MOD + "⇧Z", "Annulla / ripeti"], [MOD + "S", "Salva .gdc", 1], [MOD + "O", "Apri .gdc", 1], [MOD + "C / " + MOD + "X", "Copia / taglia l'area del layer attivo (anche per Illustrator)", 1], [MOD + "V", "Incolla nel layer attivo, al cursore", 1], [MOD + "A", "Seleziona tutto", 1], [EXP + "⇧C", "Copia SVG per Illustrator", 1], [EXP + "E", "Esporta SVG", 1], [EXP + "⇧E", "Esporta PNG", 1], ["H", "Nascondi griglia"], ["P (tieni)", "Anteprima pulita"], ["?", "Questa finestra", 1]]],
 ]
 $("helpBody").innerHTML = HELP.map(([t, rows]) => `<h4>${t}</h4>` + rows.map(([k, d, n]) => `<div class="k"><span><kbd>${k}</kbd></span><span>${d}${n ? '<span class="new">NUOVO</span>' : ""}</span></div>`).join("")).join("")
 
