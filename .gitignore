@@ -1,0 +1,5 @@
+# reference clone of the original project (has its own .git)
+original/
+# local tooling
+.claude/
+.DS_Store

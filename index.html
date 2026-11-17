@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Glyph Drawing Club+</title>
+<link rel="stylesheet" href="style.css?v=23" />
+</head>
+<body>
+<div id="app" class="app">
+<header class="topbar">
+	<div class="brand">GDC<span>+</span></div>
+	<input id="fileName" class="filename" value="Untitled" spellcheck="false" title="Nome file" />
+	<div class="tb-group">
+		<button id="btnUndo" title="Annulla (⌘Z)">↶</button>
+		<button id="btnRedo" title="Ripeti (⌘⇧Z)">↷</button>
+	</div>
+	<div class="tb-group tools">
+		<button id="toolPaint" title="Pennello: trascina sulla tela per disegnare, Alt per cancellare (G)">✎ Pennello <kbd>G</kbd></button>
+		<button id="toolType" title="Scrittura: digita testo col font (T, Esc per uscire)">Aa Scrivi <kbd>T</kbd></button>
+		<button id="toolGrid" title="Mostra / nascondi griglia (H)"># Griglia <kbd>H</kbd></button>
+	</div>
+	<div class="tb-group">
+		<button id="btnNew" title="Nuova tela">Nuovo</button>
+		<button id="btnOpen" title="Apri .gdc (⌘O)">Apri</button>
+		<button id="btnSave" title="Salva .gdc (⌘S)">Salva</button>
+	</div>
+	<div class="tb-group export">
+		<button id="btnCopySvg" class="primary" title="Copia SVG pulito negli appunti → incolla in Illustrator (⌘⇧C)">Copia per Illustrator</button>
+		<button id="btnSvg" title="Esporta SVG pulito (⌘E)">SVG</button>
+		<button id="btnPng" title="Esporta PNG (⌘⇧E)">PNG</button>
+	</div>
+	<button id="btnHelp" class="help" title="Scorciatoie (?)">?</button>
+</header>
+
+<main class="workspace">
+	<section id="stage" class="stage">
+		<div id="world" class="world">
+			<div id="colNums" class="colNums"></div>
+			<div id="rowNums" class="rowNums"></div>
+			<div id="paper" class="paper">
+				<svg id="art" xmlns="http://www.w3.org/2000/svg"><g id="bgLayer"></g><g id="fgLayer"></g></svg>
+				<svg id="ui" class="ui" xmlns="http://www.w3.org/2000/svg">
+					<path id="gridMinor" class="gridMinor" />
+					<path id="gridMajor" class="gridMajor" />
+					<rect id="hoverRect" class="hoverRect" />
+					<rect id="selRect" class="selRect" />
+					<rect id="curRect" class="curRect" />
+				</svg>
+			</div>
+		</div>
+		<div class="zoombox">
+			<button id="zoomOut" title="Zoom − (-)">−</button>
+			<button id="zoomReset" title="Adatta alla finestra">⊙</button>
+			<button id="zoomPct" class="pct" title="Torna al 100%">100%</button>
+			<button id="zoomIn" title="Zoom + (+)">+</button>
+		</div>
+		<div id="quickColor" class="quickColor hidden"></div>
+		<div id="toast" class="toast"></div>
+	</section>
+
+	<aside class="sidebar">
+		<nav class="tabs" role="tablist">
+			<button data-tab="draw" class="active">Disegna</button>
+			<button data-tab="color">Colore</button>
+			<button data-tab="canvas">Tela</button>
+			<button data-tab="file">File</button>
+		</nav>
+
+		<div class="panel active" data-panel="draw">
+			<section>
+				<h3>Disegna la forma <span class="hint">trovo i glyph più simili</span></h3>
+				<div class="sketch">
+					<div class="padWrap">
+						<canvas id="sketchPad" class="pad" title="Disegna la forma che cerchi. Dopo una pausa il tratto successivo ricomincia; tieni ⇧ per aggiungere. Clic destro o Alt = gomma."></canvas>
+						<button id="sketchClear" class="padClear" title="Cancella lo schizzo">×</button>
+					</div>
+					<div id="sketchResults" class="sketchResults empty"></div>
+				</div>
+				<div id="sketchStatus" class="muted small"></div>
+			</section>
+			<section>
+				<h3>Glyph corrente</h3>
+				<div class="current">
+					<svg id="curGlyph" class="curGlyph"></svg>
+					<div class="curInfo">
+						<div><b id="curGid">#1</b> <span id="curFont" class="muted"></span></div>
+						<div class="row">
+							<button data-act="rotate" title="Ruota (R)">⟳ R</button>
+							<button data-act="flip" title="Specchia (F)">⇋ F</button>
+							<button data-act="invert" title="Inverti (I)">◐ I</button>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section class="glyphSection">
+				<h3>Glyph <span class="hint">[ ] per scorrere</span></h3>
+				<div class="row">
+					<select id="fontSelect">
+						<option value="fonts/Tesserae-TypeDesign.otf">Tesserae Core</option>
+						<option value="fonts/Tesserae-4x4Extended.otf">Tesserae Extended</option>
+						<option value="fonts/RayMantaC64-Regular.otf">RayMantaC64 (PETSCII)</option>
+						<option value="fonts/unscii-16.ttf">Unscii</option>
+						<option value="fonts/submona.ttf">Submona (Shift_JIS)</option>
+						<option value="fonts/ImagoMundiMei-Regular.otf">ImagoMundiMei</option>
+						<option value="fonts/ScrollBorder-Regular.otf">ScrollBorder</option>
+					</select>
+					<label class="btn" title="Carica un tuo font (.otf/.ttf) — oppure trascinalo sulla pagina">Font…<input type="file" id="fontFile" accept=".otf,.ttf,.woff" hidden /></label>
+				</div>
+				<div class="row">
+					<input id="glyphJump" type="number" min="1" placeholder="Vai al #" />
+					<label class="chk"><input type="checkbox" id="glyphInvert" /> Inverti anteprime</label>
+				</div>
+				<div id="glyphGrid" class="glyphGrid"></div>
+				<div id="fontCredits" class="muted small"></div>
+			</section>
+
+			<section>
+				<h3>Layer <span class="hint">, . per cambiare</span></h3>
+				<div id="layers" class="layers"></div>
+				<div class="row layerBar">
+					<button id="layerAdd" title="Nuovo layer sopra quello selezionato">+ Nuovo layer</button>
+					<button id="layerDel" title="Elimina il layer selezionato (⌘Z per annullare)">Elimina</button>
+					<span class="hint">trascina per riordinare</span>
+				</div>
+			</section>
+
+			<details class="sec" open>
+				<summary>Set di glyph <span class="hint">M assegna · 1–0 inserisce</span></summary>
+				<div class="row">
+					<label class="chk"><input type="checkbox" id="toggleMapping" /> Mappa (M)</label>
+					<span class="spacer"></span>
+					<button id="setPrev">‹</button><span id="setLabel" class="pill">1/1</span><button id="setNext">›</button>
+					<button id="setAdd" title="Nuovo set">+</button><button id="setDel" title="Elimina set">−</button>
+				</div>
+				<div id="slots" class="slots"></div>
+			</details>
+
+			<details class="sec">
+				<summary>Regolazione fine <span class="hint">dimensione · offset · reset</span></summary>
+				<div class="row"><span class="lbl">Dimensione</span>
+					<button data-act="sizeDown">−1</button><button data-act="sizeUp">+1</button>
+					<button data-act="sizeCellDown">−cella</button><button data-act="sizeCellUp">+cella</button>
+					<span id="sizeVal" class="pill">0</span>
+				</div>
+				<div class="row"><span class="lbl">Offset <span class="hint">O + frecce</span></span>
+					<button data-act="offL">←</button><button data-act="offR">→</button>
+					<button data-act="offU">↑</button><button data-act="offD">↓</button>
+					<span id="offVal" class="pill">0, 0</span>
+				</div>
+				<div class="row"><span class="lbl">Passo offset</span><input id="offsetAmount" type="number" value="100" /></div>
+				<div class="row">
+					<button data-act="glyphReset">Reset glyph</button>
+					<button data-act="offsetReset">Reset offset</button>
+				</div>
+			</details>
+		</div>
+
+		<div class="panel" data-panel="color">
+			<section>
+				<h3>Palette <span class="hint">clic = primo piano · clic destro = sfondo · X = rapido</span></h3>
+				<div class="row">
+					<div class="swatchPair"><div id="fgSwatch" class="sw fg" title="Primo piano"></div><div id="bgSwatch" class="sw bg" title="Sfondo"></div></div>
+					<label class="chk"><input type="checkbox" id="onlyUsed" /> Solo colori usati</label>
+				</div>
+				<div id="palette" class="palette"></div>
+			</section>
+			<section>
+				<h3>Pennello colore</h3>
+				<label class="chk"><input type="checkbox" id="brushFg" /> Colora primo piano trascinando</label>
+				<label class="chk"><input type="checkbox" id="brushBg" /> Colora sfondo trascinando</label>
+			</section>
+			<section>
+				<h3>Modifica colore <span id="editLabel" class="hint"></span></h3>
+				<div id="rgb" class="rgb"></div>
+				<label class="chk"><input type="checkbox" id="editCohesion" /> Modifica colore di coesione</label>
+			</section>
+			<details class="sec">
+				<summary>Palette avanzate <span class="hint">salvate · preset · coesione</span></summary>
+				<div class="row">
+					<button id="palPrev">‹</button><span id="palLabel" class="pill">1/1</span><button id="palNext">›</button>
+					<button id="palAdd">+</button><button id="palDel">−</button>
+				</div>
+				<div class="row"><span class="lbl">Preset</span><select id="presetSelect"><option value="">— scegli —</option></select></div>
+				<div class="row"><span class="lbl">Coesione</span><input id="cohesion" type="range" min="0" max="1" step="0.01" value="0" /><span id="cohVal" class="pill">0%</span></div>
+			</details>
+		</div>
+
+		<div class="panel" data-panel="canvas">
+			<section>
+				<h3>Dimensione tela</h3>
+				<div class="row"><span class="lbl">Larghezza</span><button data-act="colDel">−1</button><button data-act="colAdd">+1</button><span id="wVal" class="pill"></span></div>
+				<div class="row"><span class="lbl">Altezza</span><button data-act="rowDel">−1</button><button data-act="rowAdd">+1</button><span id="hVal" class="pill"></span></div>
+				<div class="row"><span class="lbl">Al cursore</span>
+					<button data-act="rowAddAt">+ riga ↑</button><button data-act="rowDelAt">− riga</button>
+					<button data-act="colAddAt">+ col ←</button><button data-act="colDelAt">− col</button>
+				</div>
+				<button data-act="emptyCanvas" class="danger">Svuota tela</button>
+			</section>
+			<section>
+				<h3>Dimensione cella</h3>
+				<div class="row"><span class="lbl">Larghezza</span><button data-act="cwDown">−1</button><button data-act="cwUp">+1</button><span id="cwVal" class="pill"></span></div>
+				<div class="row"><span class="lbl">Altezza</span><button data-act="chDown">−1</button><button data-act="chUp">+1</button><span id="chVal" class="pill"></span></div>
+				<div class="row"><span class="lbl">Font size</span><button data-act="fsDown">−1</button><button data-act="fsUp">+1</button><span id="fsVal" class="pill"></span></div>
+			</section>
+			<section>
+				<h3>Misure di stampa</h3>
+				<div class="row"><span class="lbl">DPI</span><input id="dpi" type="number" value="150" /></div>
+				<div id="mmVal" class="muted"></div>
+			</section>
+		</div>
+
+		<div class="panel" data-panel="file">
+			<section>
+				<h3>Salva / Apri</h3>
+				<div class="row"><button id="btnSave2">Salva .gdc</button><button id="btnSaveSel">Salva selezione</button></div>
+				<div class="row"><button id="btnOpen2">Apri .gdc</button><button id="btnPlace">Inserisci da file al cursore</button></div>
+				<input type="file" id="openFile" accept=".gdc,.json" hidden />
+				<input type="file" id="placeFile" accept=".gdc,.json" hidden />
+			</section>
+			<section>
+				<h3>Esporta</h3>
+				<p class="muted small">L'SVG è pulito: nessuna griglia, nessun rettangolo per cella, niente maschere. Ogni forma è un tracciato separato, organizzato in gruppi: layer → colore. Tracciati composti solo dove servono per i buchi.</p>
+				<label class="chk"><input type="checkbox" id="exportBg" checked /> Includi colori di sfondo</label>
+				<label class="chk"><input type="checkbox" id="exportSel" checked /> Se c'è una selezione bloccata (⇧S), esporta solo quella</label>
+				<div class="row"><span class="lbl">Unità</span><select id="exportUnit"><option value="px">px (1 px = 1 pt in Illustrator)</option><option value="mm">mm (usa i DPI di Tela)</option></select></div>
+				<div class="row"><button id="btnCopySvg2" class="primary">Copia per Illustrator</button><button id="btnSvg2">Scarica SVG</button></div>
+				<div class="row"><span class="lbl">Scala PNG</span><input id="exportScale" type="number" min="1" max="25" value="5" /><span id="pngSize" class="muted"></span></div>
+				<button id="btnPng2">Scarica PNG</button>
+			</section>
+			<section>
+				<h3>Crediti</h3>
+				<p class="muted small">Basato su <a href="https://glyphdrawing.club" target="_blank">Glyph Drawing Club</a> di Heikki Lotvonen (MIT). Font: Tesserae, Unscii, Submona, RayMantaC64, ImagoMundiMei, ScrollBorder — vedi i rispettivi autori.</p>
+			</section>
+		</div>
+	</aside>
+</main>
+
+<footer class="status">
+	<span id="stPos">x:1 y:1</span>
+	<span id="stLayer">Layer 1</span>
+	<span id="stSel"></span>
+	<span id="stMode"></span>
+	<span class="spacer"></span>
+	<span id="stHint" class="muted hint-line"></span>
+</footer>
+</div>
+
+<div id="helpModal" class="modal hidden">
+	<div class="modalBox">
+		<button class="close" id="helpClose">×</button>
+		<h2>Scorciatoie da tastiera</h2>
+		<p class="muted small">Tieni premuto <kbd>Ctrl</kbd> per agire su tutti i layer. Tutte le scorciatoie originali di Glyph Drawing Club funzionano ancora.</p>
+		<div id="helpBody" class="helpGrid"></div>
+	</div>
+</div>
+
+<script src="scripts/Typr.js"></script>
+<script src="scripts/Typr.U.js"></script>
+<script src="app.js?v=23"></script>
+</body>
+</html>

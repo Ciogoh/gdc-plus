@@ -1,0 +1,20 @@
+# Glyph Drawing Club+
+
+Ricostruzione di [glyphdrawing.club](https://glyphdrawing.club) (MIT, Heikki Lotvonen — sorgente originale in `original/`) con UI più pulita, scorciatoie extra ed export SVG pulito per Illustrator. Nessuna build: HTML + JS vanilla.
+
+## Avvio
+
+```bash
+python3 -m http.server 8765
+```
+
+Poi apri http://localhost:8765 (serve un server perché i font vengono caricati via fetch).
+
+## Cosa cambia rispetto all'originale
+
+- **Export SVG pulito**: niente `<svg>` annidati, niente rettangolo per ogni cella. Ogni forma è un tracciato separato con coordinate già trasformate, organizzato in gruppi layer → colore (`layer-1`…`layer-4`, `sfondo`). Tracciati composti solo per i buchi veri (es. celle invertite). Con una selezione bloccata (⇧S) si esporta solo quell'area; unità in px o mm (dai DPI).
+- **Copia per Illustrator** (⌘⇧C): copia l'SVG negli appunti → ⌘V in Illustrator.
+- Scorciatoie nuove: `[` `]` glyph prec./succ., `{` `}` ±10, `G` pennello, `T` scrittura, `Esc` deseleziona, `?` guida, ⌘S / ⌘O / ⌘E / ⌘⇧E, Shift+trascina per selezionare, rotella = pan, pinch = zoom.
+- **Disegna la forma**: schizzi a mano libera (anche solo il contorno, o riempimenti sporchi) e compaiono subito i glyph più simili del font, con varianti ruotate, specchiate e invertite; scegli con le frecce e piazzi con Q.
+- **Layer** in un pannello verticale classico: si parte da 1, se ne aggiungono fino a 16, si riordinano trascinandoli. I `.gdc` si salvano sempre con almeno 4 layer, così l'originale li apre ancora (file con più di 4 layer solo qui).
+- Tutte le scorciatoie originali restano valide. I file `.gdc` sono compatibili in entrambe le direzioni.
