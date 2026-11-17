@@ -1,8 +1,10 @@
 # Glyph Drawing Club+
 
-Ricostruzione di [glyphdrawing.club](https://glyphdrawing.club) (MIT, Heikki Lotvonen — sorgente originale in `original/`) con UI più pulita, scorciatoie extra ed export SVG pulito per Illustrator. Nessuna build: HTML + JS vanilla.
+**→ Usalo online: [ciogoh.github.io/gdc-plus](https://ciogoh.github.io/gdc-plus/)**
 
-## Avvio
+Ricostruzione di [glyphdrawing.club](https://glyphdrawing.club) (MIT, Heikki Lotvonen — [sorgente originale](https://github.com/hlotvonen/glyph-drawing-club)) con UI più pulita, scorciatoie extra ed export SVG pulito per Illustrator. Nessuna build: HTML + JS vanilla.
+
+## Avvio in locale
 
 ```bash
 python3 -m http.server 8765
